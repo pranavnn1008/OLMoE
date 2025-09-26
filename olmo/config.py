@@ -989,7 +989,7 @@ class TrainConfig(BaseConfig):
     Evaluation configurations.
     """
 
-    eval_interval: int = 1000
+    eval_interval: Optional[int] = None
     """
     How often (in terms of batches) to run evaluations.
     """
@@ -1046,6 +1046,16 @@ class TrainConfig(BaseConfig):
     save_num_unsharded_checkpoints_to_keep: int = -1
     """
     How many unsharded checkpoints to keep.
+    """
+
+    save_count_log_scale_unsharded: Optional[int] = None
+    """
+    If set, then unsharded checkpoints will be kept according to a logarithmic scale.
+    """
+
+    eval_count_log_scale: Optional[int] = None
+    """
+    If set, then evaluations will be run according to a logarithmic scale.
     """
 
     save_overwrite: bool = False
@@ -1359,7 +1369,7 @@ def config_to_moe_args(config: ModelConfig) -> Dict[str, Any]:
         "moe_num_experts": config.moe_num_experts,
         "num_layers": config.n_layers,
         # Handled by FSDP (https://github.com/databricks/megablocks/issues/57#issuecomment-1854594483)
-        "moe_weight_parallelism": False,
+        # "moe_weight_parallelism": False,
         "moe_expert_model_parallelism": False,
         "moe_top_k": config.moe_top_k,
         "moe_capacity_factor": config.moe_capacity_factor,

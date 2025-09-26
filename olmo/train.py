@@ -27,6 +27,8 @@ from typing import (
     Tuple,
     Union,
 )
+from torch.profiler import profile, ProfilerActivity, record_function
+
 
 import numpy as np
 import torch
@@ -70,14 +72,22 @@ from .torch_util import (
 )
 from .util import upload
 
-try:
-    from megablocks.layers.moe import (
-        batched_load_balancing_loss,
-        clear_load_balancing_loss,
-        get_load_balancing_loss,
-    )
-except ImportError:
-    pass
+
+from megablocks.layers.moe import (
+    batched_load_balancing_loss,
+    clear_load_balancing_loss,
+    get_load_balancing_loss,
+    clear_tokens_per_topk_expert,
+    get_tokens_per_topk_expert,
+
+)
+from megablocks.layers.router import (
+    batched_router_zloss,
+    clear_router_zloss,
+)
+
+import gc
+
 
 __all__ = ["SpeedMonitor", "LRMonitor", "Trainer"]
 
@@ -825,6 +835,14 @@ class Trainer:
             )
             else torch.zeros((self.model.config.n_layers, self.model.config.moe_num_experts), device=self.device)
         )
+        topk_assignments = (
+            None
+            if (
+                (self.model.config.block_type != BlockType.moe)
+                or (self.model.config.moe_log_expert_assignment is False)
+            )
+            else torch.zeros((self.model.config.n_layers, self.model.config.moe_top_k, self.model.config.moe_num_experts), device=self.device)
+        )
         num_micro_batches = len(micro_batches)
 
         for micro_batch_idx, micro_batch in enumerate(micro_batches):
@@ -857,18 +875,28 @@ class Trainer:
 
                 if self.model.config.block_type == BlockType.moe:
                     if self.model.config.moe_zloss_weight:
-                        lb_loss, moe_z_loss = batched_load_balancing_loss(self.moe_args)
+                        lb_loss = batched_load_balancing_loss(self.moe_args)
+                        moe_z_loss = batched_router_zloss(self.moe_args)
                         lb_loss = lb_loss / len(micro_batches)
                         moe_z_loss = moe_z_loss / len(micro_batches)
                     elif self.model.config.moe_loss_weight:
                         lb_loss = batched_load_balancing_loss(self.moe_args) / len(micro_batches)
                     if self.model.config.moe_log_expert_assignment:
-                        if self.model.config.moe_zloss_weight:
-                            tokens_per_expert, _, _ = zip(*get_load_balancing_loss())
-                        else:
-                            tokens_per_expert, _ = zip(*get_load_balancing_loss())
+
+                        tokens_per_expert, _ = zip(*get_load_balancing_loss())
                         expert_assignments += torch.stack(tokens_per_expert, dim=0)
+
+                        tokens_per_topk_expert = get_tokens_per_topk_expert()
+                        assert len(tokens_per_topk_expert) == self.model.config.n_layers
+                        tokens_per_topk_expert = torch.cat(tokens_per_topk_expert)
+                        tokens_per_topk_expert = torch.nn.functional.one_hot(
+                            tokens_per_topk_expert, num_classes=self.model.config.moe_num_experts
+                        ).sum(dim=1)
+                        topk_assignments += tokens_per_topk_expert
+
                     clear_load_balancing_loss()
+                    clear_router_zloss()
+                    clear_tokens_per_topk_expert()
                     if self.model.config.moe_loss_weight:
                         loss += lb_loss
                         lb_batch_loss += lb_loss.detach()
@@ -883,7 +911,7 @@ class Trainer:
             for hook in output_hooks:
                 hook.remove()
 
-        return ce_batch_loss, z_batch_loss, lb_batch_loss, moe_z_batch_loss, expert_assignments
+        return ce_batch_loss, z_batch_loss, lb_batch_loss, moe_z_batch_loss, expert_assignments, topk_assignments
 
     def train_step(self, batch: Dict[str, Any], reduce_global_loss: bool = True) -> Dict[str, float]:
         metrics: Dict[str, float] = {}
@@ -904,7 +932,7 @@ class Trainer:
         batch = move_to_device(batch, self.device)
 
         # Run forward-backward pass.
-        ce_batch_loss, z_batch_loss, lb_batch_loss, moe_z_batch_loss, expert_assignments = self.train_batch(batch)
+        ce_batch_loss, z_batch_loss, lb_batch_loss, moe_z_batch_loss, expert_assignments, topk_assignments = self.train_batch(batch)
 
         # Collect loss, potentially reducing over all ranks.
         if reduce_global_loss:
@@ -966,6 +994,7 @@ class Trainer:
             metrics["train/LoadBalancingLoss"] = lb_batch_loss.item()
             # Log assignment metrics.
             if expert_assignments is not None:
+                assert topk_assignments is not None
                 for layer_idx, expert_assignments_layer in enumerate(expert_assignments):
                     total_tokens = expert_assignments_layer.sum().item()
                     for expert_idx, expert_assignment in enumerate(expert_assignments_layer):
@@ -975,6 +1004,22 @@ class Trainer:
                         metrics[
                             f"train/TokensTotal/layer{layer_idx}/expert{expert_idx}"
                         ] = expert_assignment.item()
+
+                for layer_idx, topk_assignments_layer in enumerate(topk_assignments):
+                    total_tokens_per_topk = topk_assignments_layer.sum(axis=-1)
+                    for topk_idx in range(self.model.config.moe_top_k):
+                        for expert_idx in range(self.model.config.moe_num_experts):
+                            metrics[f"train/TopK/TokensPercentage/layer{layer_idx}/topk{topk_idx}/expert{expert_idx}"] = (
+                                topk_assignments_layer[topk_idx][expert_idx].item() / total_tokens_per_topk[topk_idx].item()
+                            ) * 100
+
+                    tokens_per_expert = topk_assignments_layer.sum(axis=0)
+                    for expert_idx in range(self.model.config.moe_num_experts):
+                        for topk_idx in range(self.model.config.moe_top_k):
+                            metrics[f"train/ExpertFrac/TokensPercentage/layer{layer_idx}/expert{expert_idx}/topk{topk_idx}"] = (
+                                topk_assignments_layer[topk_idx][expert_idx].item() / tokens_per_expert[expert_idx].item()
+                            ) * 100 if tokens_per_expert[expert_idx].item() > 0 else 0.0
+
         if moe_z_batch_loss is not None:
             metrics["train/MoEZLoss"] = moe_z_batch_loss.item()
 
@@ -990,6 +1035,7 @@ class Trainer:
 
     def eval_batch(self, batch: Dict[str, Any]) -> Tuple[torch.Tensor, torch.Tensor]:
         with torch.autocast("cuda", enabled=True, dtype=self.cfg.autocast_precision):
+            
             ce_loss, _, logits = self.model_forward(batch, loss_reduction="none")
         return ce_loss.mean(dim=-1), logits
 
@@ -1001,9 +1047,13 @@ class Trainer:
         with torch.no_grad():  # NOTE: 'torch.inference_mode()' doesn't work with 'torch.compile()'.
             ce_loss, logits = self.eval_batch(batch)
 
-        # Update metrics.
+            del logits
+            gc.collect()
+            torch.cuda.empty_cache()
+
+        # # Update metrics.
         evaluator.update_metrics(
-            batch, ce_loss, logits
+            batch, ce_loss, #logits
         )  # batch includes all keys that the downstream evaluation needs
 
         barrier()
@@ -1077,6 +1127,16 @@ class Trainer:
             optim_log_interval = max(optim_log_interval, self.cfg.wandb.log_interval)
         return self.global_step % optim_log_interval == 0
 
+    def should_eval_this_step(self, stop_at) -> bool:
+        assert self.cfg.eval_interval is not None or self.cfg.eval_count_log_scale is not None
+        if self.cfg.eval_interval is not None or self.global_step >= stop_at:
+            return self.global_step % self.cfg.eval_interval == 0
+        else:
+            assert type(self.cfg.max_duration) == int
+            logspace = np.logspace(-2.1, 0, self.cfg.eval_count_log_scale) * self.cfg.max_duration
+            log_steps = [int(n / 100) * 100 for n in logspace]
+            return self.global_step in log_steps
+
     def should_log_this_step(self) -> bool:
         if self.global_step % self.cfg.console_log_interval == 0:
             return True
@@ -1085,8 +1145,22 @@ class Trainer:
         else:
             return False
 
+
+    def should_save_unsharded_this_step(self) -> bool:
+        if self.cfg.save_interval_unsharded is not None:
+            return self.global_step % self.cfg.save_interval_unsharded == 0
+        if self.cfg.save_count_log_scale_unsharded is not None:
+            assert type(self.cfg.max_duration) == int
+            logspace = np.logspace(-2.1, 0, self.cfg.save_count_log_scale_unsharded) * self.cfg.max_duration
+            log_steps = [int(n / 100) * 100 for n in logspace]
+            return self.global_step in log_steps
+        else:
+            return False
+
+
     def eval(self) -> Dict[str, Any]:
         # Zero gradients and set model to 'eval' mode.
+        
         self.optim.zero_grad(set_to_none=True)
         self.dist_model.eval()
 
@@ -1370,8 +1444,7 @@ class Trainer:
                     # This code snippet should always execute when running DDP.
                     if (
                         save_checkpoints
-                        and self.cfg.save_interval_unsharded is not None
-                        and self.global_step % self.cfg.save_interval_unsharded == 0
+                        and self.should_save_unsharded_this_step()
                         and self.cfg.save_num_unsharded_checkpoints_to_keep != 0
                     ):
                         log.info("Saving unsharded checkpoint...")
@@ -1382,10 +1455,31 @@ class Trainer:
                         speed_monitor.reset()
 
                     # Maybe run evaluations.
-                    if not cancel_initiated and (
-                        self.global_step % self.cfg.eval_interval == 0 or self.global_step >= stop_at
-                    ):
+                    if not cancel_initiated and self.should_eval_this_step(stop_at):
                         eval_metrics = self.eval()
+
+                        # optimizer_to_fix = self.optim
+                        # self.optim.zero_grad(set_to_none=True)
+
+                        # This forces FSDP to throw away the full flat params and re-shard them,
+                        # which should also trigger the cleanup of the associated optimizer states.
+                        # from torch.distributed.fsdp._flat_param import FlatParamHandle
+                        # for param_group in optimizer.param_groups:
+                        #     for param in param_group["params"]:
+                        #         if isinstance(param, FlatParamHandle):
+                        #             param.init_flat_param_and_metadata()
+
+                        # fsdp_model = self.dist_model
+                        # with FSDP.summon_full_params(fsdp_model, offload_to_cpu=False, rank0_only=False):
+                        #     # We don't need to do anything inside the context.
+                        #     # The cleanup logic runs automatically when the 'with' block exits.
+                        #     pass
+                        # FSDP.scatter_full_optim_state_dict({}, optimizer_to_fix, model=fsdp_model)
+
+                        # Now, perform the cleanup.
+                        # gc.collect()
+                        # torch.cuda.empty_cache()
+
 
                         # Log metrics to W&B.
                         if wandb.run is not None:

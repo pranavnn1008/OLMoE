@@ -68,7 +68,7 @@ class Evaluator:
         self,
         batch: Dict[str, Any],
         ce_loss: torch.Tensor,
-        logits: torch.Tensor,
+        logits: torch.Tensor | None = None,
     ) -> None:
         if self.type == EvaluatorType.downstream:
             assert isinstance(self.eval_metric, ICLMetric)

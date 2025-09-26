@@ -71,7 +71,7 @@ global_train_batch_size: 512
 device_train_batch_size: null
 device_train_microbatch_size: 16
 device_eval_batch_size: 16
-eval_subset_num_batches: -1
+eval_subset_num_batches: 1000
 eval_on_load: false
 device_train_grad_accum: null
 max_grad_norm: null
