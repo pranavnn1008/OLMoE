@@ -9,7 +9,7 @@
 #SBATCH --time=72:00:00
 #SBATCH --mem=300GB
 #SBATCH --partition=kempner_h100
-#SBATCH --array=1-2
+#SBATCH --array=1
 
 # --- Environment Setup ---
 module load python

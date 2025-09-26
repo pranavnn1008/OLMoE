@@ -2,7 +2,7 @@ import itertools
 
 def generate_commands():
     # --- Define the sweep space ---
-    learning_rates = [1e-3, 3e-3] #, 1e-2]
+    learning_rates = [1e-3] #, 3e-3] #, 1e-2]
     batch_sizes = [128] #, 256]
 
     # --- Define constant paths and base command ---
