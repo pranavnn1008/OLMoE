@@ -1128,8 +1128,9 @@ class Trainer:
         return self.global_step % optim_log_interval == 0
 
     def should_eval_this_step(self, stop_at) -> bool:
+        del stop_at
         assert self.cfg.eval_interval is not None or self.cfg.eval_count_log_scale is not None
-        if self.cfg.eval_interval is not None or self.global_step >= stop_at:
+        if self.cfg.eval_interval is not None:
             return self.global_step % self.cfg.eval_interval == 0
         else:
             assert type(self.cfg.max_duration) == int
@@ -1144,7 +1145,6 @@ class Trainer:
             return True
         else:
             return False
-
 
     def should_save_unsharded_this_step(self) -> bool:
         if self.cfg.save_interval_unsharded is not None:

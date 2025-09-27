@@ -9,7 +9,7 @@
 #SBATCH --time=72:00:00
 #SBATCH --mem=300GB
 #SBATCH --partition=kempner_h100
-#SBATCH --array=1
+#SBATCH --array=1-2
 
 # --- Environment Setup ---
 module load python
@@ -21,7 +21,8 @@ module load gcc/13.2.0-fasrc01
 module load cuda/12.9.1-fasrc01
 
 
-export CHECKPOINTS_PATH=/n/netscratch/sham_lab/Lab/pranavajitnair/moe_sweeps/baseline_sweeps/checkpoints/
+# export CHECKPOINTS_PATH=/n/netscratch/sham_lab/Lab/pranavajitnair/moe_sweeps/baseline_sweeps/checkpoints/
+export CHECKPOINTS_PATH=/n/netscratch/sham_lab/Lab/pranavajitnair/moe_sweeps123
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # ... other environment variables ...
