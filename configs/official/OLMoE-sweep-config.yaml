@@ -6,8 +6,11 @@ no_pre_train_checkpoint: true
 wandb:
   name: ${run_name}
   project: moe_sweeps
-  group: baseline_sweeps
+  group: baseline_sweeps # no_z_loss_sweeps
   entity: harvardml
+  log_interval: 1
+  moe_metrics_log_interval: 10
+  advanced_moe_metrics_log_interval: 50
 
 model:
   d_model: 512

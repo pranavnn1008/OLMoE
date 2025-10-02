@@ -2,15 +2,15 @@ import itertools
 
 def generate_commands():
     # --- Define the sweep space ---
-    learning_rates = [1e-3, 3e-3] #, 1e-2]
-    batch_sizes = [128] #, 256]
+    learning_rates =  [1e-2] #, 1e-3, 3e-3]
+    batch_sizes = [128]
 
     # --- Define constant paths and base command ---
     # !!! IMPORTANT: Update these paths to match your environment !!!
     olmo_train_script = "/n/holylfs06/LABS/sham_lab/Lab/pranav/OLMo/scripts/train.py"
     base_config_file = "/n/holylfs06/LABS/sham_lab/Lab/pranav/OLMo/configs/official/OLMoE-sweep-config.yaml" # Make sure this path is correct
     
-    base_command = f"torchrun --nproc_per_node=2 {olmo_train_script} {base_config_file}"
+    base_command = f"torchrun --nproc_per_node=1 {olmo_train_script} {base_config_file}"
 
     # --- Generate all combinations and create commands ---
     commands = []
@@ -20,6 +20,7 @@ def generate_commands():
         # Create a unique, descriptive run_name for each experiment.
         # The f-string formatting `{lr:.1e}` ensures scientific notation is clean (e.g., 1.0e-04).
         #
+        # run_name = f"olmoe_no_z_loss_lr_{lr:.1e}_bs_{bs}"
         run_name = f"olmoe_baseline_lr_{lr:.1e}_bs_{bs}"
         # max_duration = int(14661811200 / (1024 * bs))  # Adjust max_duration based on batch size
         max_duration = int(6628812800 / (1024 * bs))  # Adjust max_duration based on batch size

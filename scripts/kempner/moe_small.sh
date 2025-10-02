@@ -4,10 +4,10 @@
 #SBATCH --output=/n/netscratch/sham_lab/Lab/pranavajitnair/logs_moe_sweeps/%A-%a.log
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=2
-#SBATCH --cpus-per-task=36
+#SBATCH --gpus-per-node=1
+#SBATCH --cpus-per-task=24
 #SBATCH --time=72:00:00
-#SBATCH --mem=300GB
+#SBATCH --mem=150GB
 #SBATCH --partition=kempner_h100
 #SBATCH --array=1-2
 
@@ -22,6 +22,7 @@ module load cuda/12.9.1-fasrc01
 
 
 # export CHECKPOINTS_PATH=/n/netscratch/sham_lab/Lab/pranavajitnair/moe_sweeps/baseline_sweeps/checkpoints/
+# export WANDB_MODE=offline
 export CHECKPOINTS_PATH=/n/netscratch/sham_lab/Lab/pranavajitnair/moe_sweeps123
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
