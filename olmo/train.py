@@ -995,30 +995,32 @@ class Trainer:
             # Log assignment metrics.
             if expert_assignments is not None:
                 assert topk_assignments is not None
-                for layer_idx, expert_assignments_layer in enumerate(expert_assignments):
-                    total_tokens = expert_assignments_layer.sum().item()
-                    for expert_idx, expert_assignment in enumerate(expert_assignments_layer):
-                        metrics[f"train/TokensPercentage/layer{layer_idx}/expert{expert_idx}"] = (
-                            expert_assignment.item() / total_tokens
-                        ) * 100
-                        metrics[
-                            f"train/TokensTotal/layer{layer_idx}/expert{expert_idx}"
-                        ] = expert_assignment.item()
-
-                for layer_idx, topk_assignments_layer in enumerate(topk_assignments):
-                    total_tokens_per_topk = topk_assignments_layer.sum(axis=-1)
-                    for topk_idx in range(self.model.config.moe_top_k):
-                        for expert_idx in range(self.model.config.moe_num_experts):
-                            metrics[f"train/TopK/TokensPercentage/layer{layer_idx}/topk{topk_idx}/expert{expert_idx}"] = (
-                                topk_assignments_layer[topk_idx][expert_idx].item() / total_tokens_per_topk[topk_idx].item()
+                if self.global_step % self.cfg.wandb.moe_metrics_log_interval == 0:
+                    for layer_idx, expert_assignments_layer in enumerate(expert_assignments):
+                        total_tokens = expert_assignments_layer.sum().item()
+                        for expert_idx, expert_assignment in enumerate(expert_assignments_layer):
+                            metrics[f"train/TokensPercentage/layer{layer_idx}/expert{expert_idx}"] = (
+                                expert_assignment.item() / total_tokens
                             ) * 100
+                            metrics[
+                                f"train/TokensTotal/layer{layer_idx}/expert{expert_idx}"
+                            ] = expert_assignment.item()
 
-                    tokens_per_expert = topk_assignments_layer.sum(axis=0)
-                    for expert_idx in range(self.model.config.moe_num_experts):
+                if self.global_step % self.cfg.wandb.advanced_moe_metrics_log_interval == 0:
+                    for layer_idx, topk_assignments_layer in enumerate(topk_assignments):
+                        total_tokens_per_topk = topk_assignments_layer.sum(axis=-1)
                         for topk_idx in range(self.model.config.moe_top_k):
-                            metrics[f"train/ExpertFrac/TokensPercentage/layer{layer_idx}/expert{expert_idx}/topk{topk_idx}"] = (
-                                topk_assignments_layer[topk_idx][expert_idx].item() / tokens_per_expert[expert_idx].item()
-                            ) * 100 if tokens_per_expert[expert_idx].item() > 0 else 0.0
+                            for expert_idx in range(self.model.config.moe_num_experts):
+                                metrics[f"train/TopK/TokensPercentage/layer{layer_idx}/topk{topk_idx}/expert{expert_idx}"] = (
+                                    topk_assignments_layer[topk_idx][expert_idx].item() / total_tokens_per_topk[topk_idx].item()
+                                ) * 100
+
+                        tokens_per_expert = topk_assignments_layer.sum(axis=0)
+                        for expert_idx in range(self.model.config.moe_num_experts):
+                            for topk_idx in range(self.model.config.moe_top_k):
+                                metrics[f"train/ExpertFrac/TokensPercentage/layer{layer_idx}/expert{expert_idx}/topk{topk_idx}"] = (
+                                    topk_assignments_layer[topk_idx][expert_idx].item() / tokens_per_expert[expert_idx].item()
+                                ) * 100 if tokens_per_expert[expert_idx].item() > 0 else 0.0
 
         if moe_z_batch_loss is not None:
             metrics["train/MoEZLoss"] = moe_z_batch_loss.item()
